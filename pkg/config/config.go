@@ -20,8 +20,7 @@ var Cfg = new()
 
 // Struct to hold our configuratioin
 type Config struct {
-	DBBatchSize         int // Batch size used to write to DB. Default: 500
-	DBHealthCkeckPeriod int // Overrides pgxpool.Config{ HealthCheckPeriod } Default: 1 min
+	DBBatchSize         int // Batch size used to write to DB. Default: 2500
 	DBHost              string
 	DBMinConns          int32 // Overrides pgxpool.Config{ MinConns } Default: 0
 	DBMaxConns          int32 // Overrides pgxpool.Config{ MaxConns } Default: 20
@@ -50,14 +49,13 @@ type Config struct {
 // Reads config from environment.
 func new() *Config {
 	conf := &Config{
-		DBBatchSize: getEnvAsInt("DB_BATCH_SIZE", 2500),
-		DBHost:      getEnv("DB_HOST", "localhost"),
-		// Postgres has 100 conns by default. Using 10 allows scaling indexer and api.
-		DBMaxConns:          getEnvAsInt32("DB_MAX_CONNS", int32(10)),                   // 10 - Overrides pgxpool default
-		DBMaxConnLifeJitter: getEnvAsInt("DB_MAX_CONN_LIFE_JITTER", 2*60*1000), // 2 min - Overrides pgxpool default
-		DBMaxConnIdleTime:   getEnvAsInt("DB_MAX_CONN_IDLE_TIME", 30*60*1000),  // 30 min - Default for pgxpool.Config
-		DBMaxConnLifeTime:   getEnvAsInt("DB_MAX_CONN_LIFE_TIME", 60*60*1000),  // 60 min - Default for pgxpool.Config
-		DBMinConns:          getEnvAsInt32("DB_MIN_CONNS", int32(2)),                    // 2 - Overrides pgxpool default
+		DBBatchSize:         getEnvAsInt("DB_BATCH_SIZE", 2500),
+		DBHost:              getEnv("DB_HOST", "localhost"),
+		DBMaxConns:          getEnvAsInt32("DB_MAX_CONNS", int32(10)),        // Overrides pgxpool default (4)
+		DBMaxConnIdleTime:   getEnvAsInt("DB_MAX_CONN_IDLE_TIME", 60*1000),   // 1 min - Overrides pgxpool default (30)
+		DBMaxConnLifeJitter: getEnvAsInt("DB_MAX_CONN_LIFE_JITTER", 10*1000), // 10 sec - Overrides pgxpool default
+		DBMaxConnLifeTime:   getEnvAsInt("DB_MAX_CONN_LIFE_TIME", 60*1000),   // 1 min - Overrides pgxpool default (60)
+		DBMinConns:          getEnvAsInt32("DB_MIN_CONNS", int32(2)),         // Overrides pgxpool default (0)
 		DBName:              getEnv("DB_NAME", ""),
 		DBPass:              getEnv("DB_PASS", ""),
 		DBPort:              getEnvAsInt("DB_PORT", 5432),
