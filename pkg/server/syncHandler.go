@@ -47,8 +47,10 @@ func (s *ServerConfig) SyncResources(w http.ResponseWriter, r *http.Request) {
 	// 1. ReSync [ClearAll=true]  - It has the complete current state. It must overwrite any previous state.
 	// 2. Sync   [ClearAll=false] - This is the delta changes from the previous state.
 	if syncEvent.ClearAll {
+		metrics.ResyncCount.WithLabelValues("true").Inc()
 		err = s.Dao.ResyncData(r.Context(), syncEvent, clusterName, syncResponse)
 	} else {
+		metrics.ResyncCount.WithLabelValues("false").Inc()
 		err = s.Dao.SyncData(r.Context(), syncEvent, clusterName, syncResponse)
 	}
 	if err != nil {

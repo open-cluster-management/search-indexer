@@ -32,6 +32,11 @@ var (
 		Buckets: []float64{50, 100, 200, 500, 5000, 10000, 25000, 50000, 100000, 200000},
 	})
 
+	ResyncCount = promauto.With(PromRegistry).NewCounterVec(prometheus.CounterOpts{
+		Name: "search_indexer_cluster_resync_request_count",
+		Help: "Total cluster resync requests received by the search indexer (from managed clusters).",
+	}, []string{"cluster_resync_request"})
+
 	// FUTURE: The summary metric could combine RequestCount and RequestDuration into a single metric.
 	// RequestSummary = promauto.With(PromRegistry).NewSummaryVec(prometheus.SummaryOpts{
 	// 	Name: "search_indexer_requests_summary",
