@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -248,4 +249,39 @@ func Test_incorrectRequestBody(t *testing.T) {
 	if responseRecorder.Code != http.StatusBadRequest {
 		t.Errorf("Want status '%d', got '%d'", http.StatusBadRequest, responseRecorder.Code)
 	}
+}
+
+func Test_syncEventDecode(t *testing.T) {
+	// Given: a mock syncEvent request body with fields clearAll, requestId, addResources, updateResources, addEdges, deleteEdges
+	body, readErr := os.Open("./mocks/decode-sync-event.json")
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	defer body.Close()
+	mockBody := io.NopCloser(body)
+
+	// When: we pass the full syncEvent request to our decode func
+	syncEvent, err := decodeSyncEvent(mockBody, "clusterName")
+
+	// Then: The entire syncEvent request is decoded into syncEvent without err
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(syncEvent.AddResources))
+	assert.Equal(t, 2, len(syncEvent.UpdateResources))
+	assert.Equal(t, 2, len(syncEvent.DeleteResources))
+	assert.Equal(t, 2, len(syncEvent.AddEdges))
+	assert.Equal(t, 2, len(syncEvent.DeleteEdges))
+	assert.Equal(t, true, syncEvent.ClearAll)
+	assert.Equal(t, 12345, syncEvent.RequestId)
+}
+
+func Test_syncEventIncorrectClearAll(t *testing.T) {
+	// Given: a mock syncEvent request body with incorrect clearAll field value
+	body := strings.NewReader(`{"clearAll": "TRUE"}`)
+	mockBody := io.NopCloser(body)
+
+	// When: we pass the syncEvent request to our decode func
+	_, err := decodeSyncEvent(mockBody, "clusterName")
+
+	// Then: it fails to decode incorrect clearAll value
+	assert.Error(t, err, "failed to decode clearAll and clearAll")
 }

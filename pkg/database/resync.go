@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/stolostron/search-indexer/pkg/metrics"
@@ -14,9 +16,32 @@ import (
 	"k8s.io/klog/v2"
 )
 
+func PrintMem(msg string) {
+	fmt.Printf(msg + strings.Repeat("\t", 6-len(msg)/8))
+	bToMb := func(b uint64) uint64 {
+		return b / 1024 / 1024
+	}
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
+	fmt.Printf("Alloc = %v MiB", bToMb(m.Alloc))
+	// fmt.Printf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
+	// fmt.Printf("\tSys = %v MiB", bToMb(m.Sys))
+	fmt.Printf("\tobjects: %v", m.HeapObjects)
+	fmt.Printf("\tNumGC = %v\n", m.NumGC)
+
+	runtime.GC()
+	runtime.ReadMemStats(&m)
+	fmt.Printf(msg + " (GC)" + strings.Repeat("\t", 6-len(msg+" (GC)")/8))
+	fmt.Printf("Alloc = %v MiB", bToMb(m.Alloc))
+	fmt.Printf("\tobjects: %v", m.HeapObjects)
+	fmt.Printf("\tNumGC = %v\n", m.NumGC)
+}
+
 // Reset data for the cluster to the incoming state.
 func (dao *DAO) ResyncData(ctx context.Context, event model.SyncEvent,
 	clusterName string, syncResponse *model.SyncResponse) error {
+	PrintMem("ResyncData Start")
 
 	defer metrics.SlowLog(fmt.Sprintf("Slow resync from %12s. RequestId: %d", clusterName, event.RequestId), 0)()
 	klog.Infof(
@@ -37,6 +62,7 @@ func (dao *DAO) ResyncData(ctx context.Context, event model.SyncEvent,
 	}
 
 	klog.V(1).Infof("Completed resync of cluster %12s.\t RequestId: %d", clusterName, event.RequestId)
+	PrintMem("ResyncData End")
 	return nil
 }
 
@@ -49,6 +75,7 @@ func (dao *DAO) ResyncData(ctx context.Context, event model.SyncEvent,
 //  4. INSERT incoming resources not found in the existing resources.
 func (dao *DAO) resetResources(ctx context.Context, resources []model.Resource, clusterName string,
 	syncResponse *model.SyncResponse) error {
+	PrintMem("resetResources start")
 	timer := time.Now()
 
 	batch := NewBatchWithRetry(ctx, dao, syncResponse)
@@ -57,14 +84,14 @@ func (dao *DAO) resetResources(ctx context.Context, resources []model.Resource, 
 	for i, resource := range resources {
 		incomingResMap[resource.UID] = &resources[i]
 	}
+	syncResponse.TotalAdded = len(incomingResMap)
 	resourcesToDelete := make([]interface{}, 0)
-	resourcesToUpdate := make([]*model.Resource, 0)
-
 	// Get existing resources (UID and data) for the cluster.
 	query, params, err := useGoqu(
 		"SELECT uid, data FROM search.resources WHERE cluster=$1 AND uid!='cluster__$1'",
 		[]interface{}{clusterName})
 	if err == nil {
+		PrintMem("existingRows start")
 		existingRows, err := dao.pool.Query(ctx, query, params...)
 		if err != nil {
 			klog.Warningf("Error getting existing resource uids for cluster %12s. Error: %+v", clusterName, err)
@@ -77,115 +104,113 @@ func (dao *DAO) resetResources(ctx context.Context, resources []model.Resource, 
 				continue
 			}
 
+			incomingResource, exists := incomingResMap[id]
+			if !exists {
+				resourcesToDelete = append(resourcesToDelete, id)
+				continue
+			}
+
 			props := make(map[string]interface{})
 			jsonErr := json.Unmarshal([]byte(data), &props)
 			if jsonErr != nil {
 				klog.Warningf("Error unmarshalling existing resource data. Error: %+v", err)
 			}
-
-			incomingResource, exists := incomingResMap[id]
-			if !exists {
-				// Resource needs to be deleted.
-				resourcesToDelete = append(resourcesToDelete, id)
-			} else if !reflect.DeepEqual(incomingResource.Properties, props) {
+			dataByte, _ := json.Marshal(incomingResource.Properties)
+			if !reflect.DeepEqual(incomingResource.Properties, props) {
 				// Resource needs to be updated.
-				resourcesToUpdate = append(resourcesToUpdate, incomingResource)
-				delete(incomingResMap, id)
-			} else {
-				// Resource exists and doesn't need to be updated.
-				delete(incomingResMap, id)
+				query, params, err := useGoqu(
+					"UPDATE search.resources SET data=$2 WHERE uid=$1",
+					[]interface{}{incomingResource.UID, string(dataByte)})
+				if err == nil {
+					queueErr := batch.Queue(batchItem{
+						action: "updateResource",
+						query:  query,
+						uid:    incomingResource.UID,
+						args:   params,
+					})
+					if queueErr != nil {
+						klog.Warningf("Error queuing resources to update. Error: %+v", queueErr)
+						return queueErr
+					}
+					syncResponse.TotalUpdated++
+				}
 			}
+			// remove incoming resource from map, all resources left are to be inserted
+			delete(incomingResMap, id)
 		}
+
+		PrintMem("existingRows end")
 		existingRows.Close()
 	}
-	metrics.LogStepDuration(&timer, clusterName, "QUERY existing resources.")
-
-	// INSERT resources that weren't found in the database.
-	for uid, resource := range incomingResMap {
-		data, _ := json.Marshal(resource.Properties)
+	for _, resource := range incomingResMap {
+		dataByte, _ := json.Marshal(resource.Properties)
+		// resource needs to be inserted
 		query, params, err := useGoqu(
 			"INSERT into search.resources values($1,$2,$3) ON CONFLICT (uid) DO NOTHING",
-			[]interface{}{uid, clusterName, string(data)})
+			[]interface{}{resource.UID, clusterName, dataByte})
 		if err == nil {
+
 			queueErr := batch.Queue(batchItem{
 				action: "addResource",
 				query:  query,
-				uid:    uid,
+				uid:    resource.UID,
 				args:   params,
 			})
 			if queueErr != nil {
 				klog.Warningf("Error queuing resources to add. Error: %+v", queueErr)
 				return queueErr
 			}
-			syncResponse.TotalAdded++
 		}
 	}
 
-	// UPDATE resources that have changed.
-	for _, resource := range resourcesToUpdate {
-		data, _ := json.Marshal(resource.Properties)
-		query, params, err := useGoqu(
-			"UPDATE search.resources SET data=$2 WHERE uid=$1",
-			[]interface{}{resource.UID, string(data)})
-		if err == nil {
-			queueErr := batch.Queue(batchItem{
-				action: "updateResource",
-				query:  query,
-				uid:    resource.UID,
-				args:   params,
-			})
-			if queueErr != nil {
-				klog.Warningf("Error queuing resources to update. Error: %+v", queueErr)
-				return queueErr
-			}
-			syncResponse.TotalUpdated++
+	PrintMem("Deleting resources start")
+	// Resource needs to be deleted.
+	query, params, err = useGoqu(
+		"DELETE from search.resources WHERE uid IN ($1)",
+		resourcesToDelete)
+	if err == nil {
+		queueErr := batch.Queue(batchItem{
+			action: "deleteResource",
+			query:  query,
+			uid:    fmt.Sprintf("%s", resourcesToDelete),
+			args:   params,
+		})
+		if queueErr != nil {
+			klog.Warningf("Error queuing resources for deletion. Error: %+v", queueErr)
 		}
 	}
+	PrintMem("Deleting resources end")
+	PrintMem("Deleting edges start")
 
-	// DELETE resources that no longer exist and their edges.
-	if len(resourcesToDelete) > 0 {
-		query, params, err := useGoqu(
-			"DELETE from search.resources WHERE uid IN ($1)",
-			resourcesToDelete)
-		if err == nil {
-			queueErr := batch.Queue(batchItem{
-				action: "deleteResource",
-				query:  query,
-				uid:    fmt.Sprintf("%s", resourcesToDelete),
-				args:   params,
-			})
-			if queueErr != nil {
-				klog.Warningf("Error queuing resources for deletion. Error: %+v", queueErr)
-			}
-			syncResponse.TotalDeleted += len(resourcesToDelete)
-		}
-
-		// DELETE edges that point to deleted resources.
-		query, _, err = useGoqu(
-			"DELETE from search.edges WHERE sourceid IN ($1) OR destid IN ($1)",
-			resourcesToDelete)
-		if err == nil {
-			queueErr := batch.Queue(batchItem{
-				action: "deleteEdge",
-				query:  query,
-				uid:    fmt.Sprintf("%s", resourcesToDelete),
-				args:   params,
-			})
-			if queueErr != nil {
-				klog.Warningf("Error queuing edges for deletion. Error: %+v", queueErr)
-			}
+	// DELETE edges that point to deleted resources.
+	query, _, err = useGoqu(
+		"DELETE from search.edges WHERE sourceid IN ($1) OR destid IN ($1)",
+		resourcesToDelete)
+	if err == nil {
+		queueErr := batch.Queue(batchItem{
+			action: "deleteEdge",
+			query:  query,
+			uid:    fmt.Sprintf("%s", resourcesToDelete),
+			args:   params,
+		})
+		if queueErr != nil {
+			klog.Warningf("Error queuing edges for deletion. Error: %+v", queueErr)
 		}
 	}
+	PrintMem("Deleting edges end")
+
+	metrics.LogStepDuration(&timer, clusterName, "QUERY existing resources.")
+
 	batch.flush()
 	batch.wg.Wait()
 	syncResponse.TotalAdded = len(incomingResMap)
 	syncResponse.TotalDeleted = len(resourcesToDelete)
-	syncResponse.TotalUpdated = len(resourcesToUpdate)
 	metrics.LogStepDuration(&timer, clusterName,
 		fmt.Sprintf("Reset resources stats: UNCHANGED [%d] INSERT [%d] UPDATE [%d] DELETE [%d]",
-			len(resources)-len(incomingResMap)-len(resourcesToUpdate),
+			len(resources)-syncResponse.TotalAdded-syncResponse.TotalUpdated,
 			syncResponse.TotalAdded, syncResponse.TotalUpdated, syncResponse.TotalDeleted))
 
+	PrintMem("resetResources end")
 	return batch.connError
 }
 
@@ -195,6 +220,7 @@ func (dao *DAO) resetResources(ctx context.Context, resources []model.Resource, 
 //  3. Delete any existing edges that aren't in the incoming sync event.
 func (dao *DAO) resetEdges(ctx context.Context, edges []model.Edge, clusterName string,
 	syncResponse *model.SyncResponse) error {
+	PrintMem("resetEdges start")
 	timer := time.Now()
 
 	batch := NewBatchWithRetry(ctx, dao, syncResponse)
@@ -275,5 +301,6 @@ func (dao *DAO) resetEdges(ctx context.Context, edges []model.Edge, clusterName 
 	batch.wg.Wait()
 	metrics.LogStepDuration(&timer, clusterName, fmt.Sprintf("Reset edges stats: INSERT [%d] DELETE [%d]",
 		syncResponse.TotalEdgesAdded, syncResponse.TotalEdgesDeleted))
+	PrintMem("resetEdges end")
 	return batch.connError
 }
