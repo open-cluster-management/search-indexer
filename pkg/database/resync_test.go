@@ -4,8 +4,8 @@ package database
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"testing"
 
@@ -26,15 +26,15 @@ func Test_ResyncData(t *testing.T) {
 
 	// Prepare Request data.
 	data, _ := os.Open("./mocks/simple.json")
+	dataBytes, _ := io.ReadAll(data)
 	var syncEvent model.SyncEvent
-	json.NewDecoder(data).Decode(&syncEvent) //nolint: errcheck
 
 	// Supress console output to prevent log messages from polluting test output.
 	defer testutils.SupressConsoleOutput()()
 
 	// Execute function test.
 	response := &model.SyncResponse{}
-	err := dao.ResyncData(context.Background(), syncEvent, "test-cluster", response)
+	err := dao.ResyncData(context.Background(), syncEvent, "test-cluster", response, dataBytes)
 
 	assert.Nil(t, err)
 }
@@ -51,15 +51,15 @@ func Test_ResyncData_errors(t *testing.T) {
 
 	// Prepare Request data.
 	data, _ := os.Open("./mocks/simple.json")
+	dataBytes, _ := io.ReadAll(data)
 	var syncEvent model.SyncEvent
-	json.NewDecoder(data).Decode(&syncEvent) //nolint: errcheck
 
 	// Supress console output to prevent log messages from polluting test output.
 	defer testutils.SupressConsoleOutput()()
 
 	// Execute function test.
 	response := &model.SyncResponse{}
-	err := dao.ResyncData(context.Background(), syncEvent, "test-cluster", response)
+	err := dao.ResyncData(context.Background(), syncEvent, "test-cluster", response, dataBytes)
 
 	assert.NotNil(t, err)
 }

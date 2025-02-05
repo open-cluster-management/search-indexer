@@ -3,6 +3,7 @@
 package database
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,7 +15,14 @@ import (
 )
 
 func (dao *DAO) SyncData(ctx context.Context, event model.SyncEvent,
-	clusterName string, syncResponse *model.SyncResponse) error {
+	clusterName string, syncResponse *model.SyncResponse, body []byte) error {
+	err := json.NewDecoder(bytes.NewReader(body)).Decode(&event)
+	if err != nil {
+		klog.Errorf("Error decoding request body from cluster [%s]. Error: %+v\n", clusterName, err)
+		return err
+	}
+	resourceTotal := len(event.AddResources) + len(event.UpdateResources) + len(event.DeleteResources)
+	metrics.RequestSize.Observe(float64(resourceTotal))
 
 	defer metrics.SlowLog(fmt.Sprintf("Slow Sync from cluster %s.", clusterName), 0)()
 	batch := NewBatchWithRetry(ctx, dao, syncResponse)

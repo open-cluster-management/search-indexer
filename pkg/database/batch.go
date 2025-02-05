@@ -5,6 +5,7 @@ package database
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -64,7 +65,10 @@ func (b *batchWithRetry) Queue(item batchItem) error {
 // Sends a batch to the database. If the batch results in an error, we divide
 // the batch into smaller batches and retry until we isolate the erroring query.
 func (b *batchWithRetry) sendBatch(items []batchItem) error {
-	defer b.wg.Done()
+	defer func() {
+		b.wg.Done()
+		runtime.GC()
+	}()
 
 	batch := &pgx.Batch{}
 	for _, item := range items {

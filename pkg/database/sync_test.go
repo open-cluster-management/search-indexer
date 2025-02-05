@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"testing"
 
@@ -25,12 +26,13 @@ func Test_SyncData(t *testing.T) {
 
 	// Prepare Request data
 	data, _ := os.Open("./mocks/simple.json")
+	dataBytes, _ := io.ReadAll(data)
 	var syncEvent model.SyncEvent
 	json.NewDecoder(data).Decode(&syncEvent) //nolint: errcheck
 
 	// Execute test
 	response := &model.SyncResponse{}
-	err := dao.SyncData(context.Background(), syncEvent, "test-cluster", response)
+	err := dao.SyncData(context.Background(), syncEvent, "test-cluster", response, dataBytes)
 
 	// Assert
 	assert.Nil(t, err)
@@ -55,6 +57,7 @@ func Test_Sync_With_Exec_Errors(t *testing.T) {
 
 	// Prepare Request data
 	data, _ := os.Open("./mocks/simple.json")
+	dataBytes, _ := io.ReadAll(data)
 	var syncEvent model.SyncEvent
 	json.NewDecoder(data).Decode(&syncEvent) //nolint: errcheck
 
@@ -63,7 +66,7 @@ func Test_Sync_With_Exec_Errors(t *testing.T) {
 
 	// Execute test
 	response := &model.SyncResponse{}
-	err := dao.SyncData(context.Background(), syncEvent, "test-cluster", response)
+	err := dao.SyncData(context.Background(), syncEvent, "test-cluster", response, dataBytes)
 
 	// Assert
 	assert.Nil(t, err)
@@ -87,6 +90,7 @@ func Test_Sync_With_OnClose_Errors(t *testing.T) {
 
 	// Prepare Request data
 	data, _ := os.Open("./mocks/simple.json")
+	dataBytes, _ := io.ReadAll(data)
 	var syncEvent model.SyncEvent
 	json.NewDecoder(data).Decode(&syncEvent) //nolint: errcheck
 
@@ -95,7 +99,7 @@ func Test_Sync_With_OnClose_Errors(t *testing.T) {
 
 	// Execute test
 	response := &model.SyncResponse{}
-	err := dao.SyncData(context.Background(), syncEvent, "test-cluster", response)
+	err := dao.SyncData(context.Background(), syncEvent, "test-cluster", response, dataBytes)
 
 	// Assert
 	assert.NotNil(t, err)
