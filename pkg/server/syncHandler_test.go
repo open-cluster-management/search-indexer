@@ -142,8 +142,7 @@ func Test_resyncRequest(t *testing.T) {
 		},
 	}
 
-	mockPool.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).Times(2)
-	mockPool.EXPECT().SendBatch(gomock.Any(), gomock.Any()).Return(br).Times(5)
+	mockPool.EXPECT().SendBatch(gomock.Any(), gomock.Any()).Return(br).Times(3)
 
 	router.HandleFunc("/aggregator/clusters/{id}/sync", server.SyncResources)
 	router.ServeHTTP(responseRecorder, request)
@@ -158,7 +157,7 @@ func Test_resyncRequest(t *testing.T) {
 		t.Error("Unable to decode response body.")
 	}
 
-	expected := model.SyncResponse{Version: config.COMPONENT_VERSION, TotalAdded: 2, TotalDeleted: 1, TotalResources: 10, TotalEdgesDeleted: 1, TotalEdges: 4}
+	expected := model.SyncResponse{Version: config.COMPONENT_VERSION, TotalAdded: 2, TotalDeleted: 0, TotalResources: 10, TotalEdgesDeleted: 1, TotalEdges: 4}
 	if fmt.Sprintf("%+v", decodedResp) != fmt.Sprintf("%+v", expected) {
 		t.Errorf("Incorrect response body.\n expected '%+v'\n received '%+v'", expected, decodedResp)
 	}
